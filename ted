@@ -1,0 +1,183 @@
+#!/bin/bash
+declare TEDPATH=$(readlink -f "$0")
+declare STTY_SETTINGS=$(stty -g)
+declare SCREEN_SIZE=$(stty size)
+declare -i SCREEN_LINES=${SCREEN_SIZE% *}
+declare -i SCREEN_COLUMNS=${SCREEN_SIZE#* }
+declare -i COMMAND_LINE=$SCREEN_LINES-1
+declare -i COLUMN=1
+declare -i LINE=1
+declare -a BUFCSR=()
+declare -i BUFIDX=0
+declare -a BUFFER=('')
+declare -n BUFCUR=BUFFER[0]
+declare LAST_CURSOR=''
+declare LAST_COMMAND=''
+declare LAST_FUN=''
+declare LAST_KEY=''
+declare MODE='NORMAL'
+declare FILENAME=''
+declare DIRTY
+
+function main {
+  # stty raw -echo # don't echo input to the screen
+  clear
+  while :; do status_render; process_input; done
+}
+function process_input {
+  LAST_FUN=''
+  read -srN1 LAST_KEY
+  if [[ $MODE = 'NORMAL' ]];then
+    case $LAST_KEY in
+      'k') up;;
+      'j') down;;
+      'h') left;;
+      'l') right;;
+      'i') MODE="INSERT";;
+      ':') command_enter;;
+    esac
+  elif [[ $MODE = 'INSERT' ]];then
+    case "$LAST_KEY" in
+      $'\e') MODE='NORMAL';;
+      $'\b') bs;;
+      $'\177') bs;; # bs sends delete on my terminal
+      $'\n') nl;;
+      [[:print:][:space:]]) DIRTY=1;spew;;
+    esac
+  else
+    case "$LAST_KEY" in
+      $'\e') command_exit;;
+      $'\n') command_eval;;
+      $'\177') bs;; # bs is delete on my terminal
+      [[:print:][:space:]]) spew;;
+    esac
+  fi
+}
+function cursor_save {
+  BUFCSR+=("$LINE;$COLUMN")
+}
+function cursor_restore {
+  echo -ne "\e[${BUFCSR[-1]}H"
+  LINE="${BUFCSR[-1]%;*}"
+  COLUMN="${BUFCSR[-1]#*;}"
+  unset 'BUFCSR[-1]'
+}
+function status_render {
+  cursor_save
+  echo -ne "\e[$SCREEN_LINES;1H\e[K$MODE\t$LINE,$COLUMN\t$BUFIDX\t$LAST_FUN"
+  cursor_restore
+}
+function up {
+  LAST_FUN="up"
+  if (( $LINE > 1 ));then
+    LINE=$LINE-1
+    BUFIDX=$BUFIDX-1
+    declare -gn BUFCUR=BUFFER[$BUFIDX]
+    (( $COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
+  fi
+}
+function down {
+  LAST_FUN="down"
+  if (( $LINE < ${#BUFFER[@]} ));then
+    LINE=$LINE+1
+    BUFIDX=$BUFIDX+1
+    declare -gn BUFCUR=BUFFER[$BUFIDX]
+    (( $COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
+  fi
+}
+function left {
+  LAST_FUN="left"
+  (( $COLUMN > 1 )) && (( COLUMN-- ))
+}
+function right {
+  LAST_FUN="right"
+  (( $COLUMN <= ${#BUFCUR} )) && (( COLUMN++ ))
+}
+function nl {
+  LAST_FUN="nl"
+  local yanked_text="${BUFCUR:$COLUMN-1}"
+  declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}"
+  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
+  local -i i=${#BUFFER[@]} j=i+1
+  while (( $i > $BUFIDX ));do
+    BUFFER[$i]="${BUFFER[$i-1]}"
+    echo -ne "\e[$j;1H\e[K${BUFFER[$i]}"
+    (( i-- ))
+    (( j-- ))
+  done
+  COLUMN=1
+  BUFIDX=$LINE
+  declare -gn BUFCUR=BUFFER[$BUFIDX]
+  declare -g ${!BUFCUR}="$yanked_text"
+  (( LINE++ ))
+  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
+}
+function bs {
+  LAST_FUN="bs"
+  if (( COLUMN > 1 ));then
+    (( COLUMN-- ))
+    declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}${BUFCUR:$COLUMN}"
+    echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
+  fi
+}
+function spew {
+  LAST_FUN="spew"
+  declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$LAST_KEY${BUFCUR:$COLUMN-1}"
+  (( COLUMN++ ))
+  echo -ne "\e[2K\e[$LINE;1H${BUFCUR}\e[$LINE;${COLUMN}H"
+}
+function command_enter {
+  cursor_save
+  LINE=$COMMAND_LINE
+  COLUMN=1
+  MODE='COMMAND'
+  LAST_COMMAND=''
+  echo -ne "\e[$LINE;1H\e[K"
+  declare -gn BUFCUR=LAST_COMMAND
+}
+function command_exit {
+  cursor_restore
+  MODE='NORMAL'
+  declare -gn BUFCUR=BUFFER[$BUFIDX]
+}
+function command_eval {
+  echo -ne "\e[$COMMAND_LINE;1H\e[K"
+  eval ${LAST_COMMAND}
+  command_exit
+}
+function s {
+  local filename="$FILENAME"
+  [[ -n "$1" ]] && filename="$1"
+  local filename_abs=$(readlink -f "$filename")
+  if [[ -z "$filename" ]];then
+    echo -n "No filename provided!"
+  elif [[ "$filename_abs" = "$TEDPATH" ]];then
+    echo -n "You can't replace me!"
+  elif [[ -f "$filename" && "$filename" != "$FILENAME" ]];then
+    echo -n "That file already exists"
+  else
+    echo -n '' > $filename
+    local -i i=0 len=${#BUFFER[@]}
+    while (( i < len ));do
+      echo "${BUFFER[$i]}" >> $filename
+      (( i++ ))
+    done
+    printf "\e[KWrote %d lines to %s" ${#BUFFER[@]} "$filename"
+    DIRTY=''
+    [[ -z "$FILENAME" ]] && FILENAME="$filename"
+  fi
+}
+function q {
+  if [[ -n $DIRTY && -n "$FILENAME" ]];then
+    command_enter
+    status_render
+    local -u c
+    read -N1 -p "Save before exiting? " c
+    [[ "$c" = 'Y' ]] && echo -ne "\e[$COMMAND_LINE;1H\e[K" && s
+  fi
+  stty "$STTY_SETTINGS" # restore terminal settings
+  clear
+  exit
+}
+trap q INT
+main

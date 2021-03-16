@@ -15,13 +15,9 @@ declare LAST_COMMAND=''
 declare LAST_FUN=''
 declare LAST_KEY=''
 declare MODE='NORMAL'
-declare FILENAME=''
+declare FILENAME="$1"
 declare DIRTY
 
-function main {
-  clear
-  while :; do status_render; process_input; done
-}
 function process_input {
   LAST_FUN=''
   read -srN1 LAST_KEY
@@ -165,16 +161,53 @@ function s {
     [[ -z "$FILENAME" ]] && FILENAME="$filename"
   fi
 }
-function q {
+function o {
+  if [[ -z $1 ]];then
+    echo -ne "I need a filename to open"
+  elif [[ ! -f $1 ]];then
+    echo -ne "That file doesn't exist"
+  else
+    save_dirty "Save before opening?"
+    local line i=0
+    declare -ga BUFFER=('')
+    while IFS= read -rs line;do
+      BUFFER[$i]="$line"
+      (( i++ ))
+    done < "$1"
+    FILENAME="$1"
+    redraw
+  fi
+}
+function redraw {
+  clear
+  local -i i=0 j=i+1 e=${#BUFFER[@]}
+  while (( i < e ));do
+    echo -ne "\e[$j;1H\e[K${BUFFER[$i]}"
+    (( i++ ))
+    (( j++ ))
+  done
+  LINE=1
+  COLUMN=1
+}
+function save_dirty {
   if [[ -n $DIRTY && -n "$FILENAME" ]];then
-    command_enter
-    status_render
     local -u c
-    read -N1 -p "Save before exiting? " c
+    read -N1 -p "$1 " c
     [[ "$c" = 'Y' ]] && echo -ne "\e[$COMMAND_LINE;1H\e[K" && s
   fi
+}
+function q {
+  command_enter
+  status_render
+  save_dirty "Save before exiting?"
   clear
   exit
 }
+# main
 trap q INT
-main
+if [[ -f "$FILENAME" ]];then
+  o "$FILENAME"
+else
+  redraw
+fi
+while :; do status_render; process_input; done

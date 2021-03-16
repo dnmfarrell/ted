@@ -17,6 +17,9 @@ declare LAST_KEY=''
 declare MODE='NORMAL'
 declare FILENAME="$1"
 declare DIRTY
+declare -ga BUFMATCH=('')
+declare -gi IDXMATCH=0
+declare -g BUFPATTERN=""
 
 function process_input {
   LAST_FUN=''
@@ -36,14 +39,15 @@ function process_input {
       $'\b') bs;;
       $'\177') bs;; # bs sends delete on my terminal
       $'\n') nl;;
-      [[:print:][:space:]]) DIRTY=1;spew;;
+      [[:print:][:space:]]) DIRTY=1;append "$LAST_KEY";;
     esac
   else
     case "$LAST_KEY" in
       $'\e') command_exit;;
       $'\n') command_eval;;
       $'\177') bs;; # bs is delete on my terminal
-      [[:print:][:space:]]) spew;;
+      $'\t') autocomplete "$LAST_COMMAND";;
+      [[:print:][:space:]]) BUFPATTERN='';append "$LAST_KEY";;
     esac
   fi
 }
@@ -114,11 +118,17 @@ function bs {
     echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
   fi
 }
-function spew {
-  LAST_FUN="spew"
-  declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$LAST_KEY${BUFCUR:$COLUMN-1}"
-  (( COLUMN++ ))
-  echo -ne "\e[2K\e[$LINE;1H${BUFCUR}\e[$LINE;${COLUMN}H"
+function append {
+  LAST_FUN="append"
+  declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$1${BUFCUR:$COLUMN-1}"
+  (( COLUMN=${#BUFCUR}+1 ))
+  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
+}
+function replace {
+  LAST_FUN="replace"
+  declare -g ${!BUFCUR}="$1"
+  (( COLUMN=${#BUFCUR}+1 ))
+  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
 }
 function command_enter {
   cursor_save
@@ -133,6 +143,9 @@ function command_exit {
   cursor_restore
   MODE='NORMAL'
   declare -gn BUFCUR=BUFFER[$BUFIDX]
+  BUFMATCH=('')
+  IDXMATCH=0
+  BUFPATTERN=""
 }
 function command_eval {
   echo -ne "\e[$COMMAND_LINE;1H\e[K"
@@ -140,6 +153,7 @@ function command_eval {
   command_exit
 }
 function s {
+  LAST_FUN="s"
   local filename="$FILENAME"
   [[ -n "$1" ]] && filename="$1"
   local filename_abs=$(readlink -f "$filename")
@@ -162,6 +176,7 @@ function s {
   fi
 }
 function o {
+  LAST_FUN="o"
   if [[ -z $1 ]];then
     echo -ne "I need a filename to open"
   elif [[ ! -f $1 ]];then
@@ -178,7 +193,23 @@ function o {
     redraw
   fi
 }
+function autocomplete {
+  LAST_FUN="autocomplete"
+  local words=( $1 )
+  (( "${#words[@]}" < 2 )) && return # I only autocomplete args
+  if [[ -z "$BUFPATTERN" ]];then
+    BUFPATTERN="${words[-1]}"
+    BUFMATCH=( $(compgen -f "$BUFPATTERN") )
+    IDXMATCH=0
+  fi
+  if (( "${#BUFMATCH[@]}" > 0 ));then
+    replace "${1% *} ${BUFMATCH[$IDXMATCH]}"
+    (( IDXMATCH++ ))
+    (( IDXMATCH == ${#BUFMATCH[@]} )) && IDXMATCH=0
+  fi
+}
 function redraw {
+  LAST_FUN="redraw"
   clear
   local -i i=0 j=i+1 e=${#BUFFER[@]}
   while (( i < e ));do

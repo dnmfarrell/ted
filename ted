@@ -1,6 +1,5 @@
 #!/bin/bash
 declare TEDPATH=$(readlink -f "$0")
-declare STTY_SETTINGS=$(stty -g)
 declare SCREEN_SIZE=$(stty size)
 declare -i SCREEN_LINES=${SCREEN_SIZE% *}
 declare -i SCREEN_COLUMNS=${SCREEN_SIZE#* }
@@ -20,7 +19,6 @@ declare FILENAME=''
 declare DIRTY
 
 function main {
-  # stty raw -echo # don't echo input to the screen
   clear
   while :; do status_render; process_input; done
 }
@@ -175,7 +173,6 @@ function q {
     read -N1 -p "Save before exiting? " c
     [[ "$c" = 'Y' ]] && echo -ne "\e[$COMMAND_LINE;1H\e[K" && s
   fi
-  stty "$STTY_SETTINGS" # restore terminal settings
   clear
   exit
 }

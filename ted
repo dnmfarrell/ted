@@ -3,7 +3,8 @@ declare TEDPATH=$(readlink -f "$0")
 declare SCREEN_SIZE=$(stty size)
 declare -i SCREEN_LINES=${SCREEN_SIZE% *}
 declare -i SCREEN_COLUMNS=${SCREEN_SIZE#* }
-declare -i COMMAND_LINE=$SCREEN_LINES-1
+declare -i LINE_STATUS=$SCREEN_LINES
+declare -i LINE_COMMAND=$SCREEN_LINES-1
 declare -i COLUMN=1
 declare -i LINE=1
 declare -a BUFCSR=()
@@ -11,12 +12,12 @@ declare -i BUFIDX=0
 declare -a BUFFER=('')
 declare -n BUFCUR=BUFFER[0]
 declare LAST_CURSOR=''
-declare LAST_COMMAND=''
+declare -x BUFCOM=''
 declare LAST_FUN=''
 declare LAST_KEY=''
 declare MODE='NORMAL'
 declare FILENAME="$1"
-declare DIRTY
+declare DIRTY=''
 declare -ga BUFMATCH=('')
 declare -gi IDXMATCH=0
 declare -g BUFPATTERN=""
@@ -36,9 +37,9 @@ function process_input {
   elif [[ $MODE = 'INSERT' ]];then
     case "$LAST_KEY" in
       $'\e') MODE='NORMAL';;
-      $'\b') bs;;
-      $'\177') bs;; # bs sends delete on my terminal
-      $'\n') nl;;
+      $'\b') DIRTY=1;bs;;
+      $'\177') DIRTY=1;bs;; # bs sends delete on my terminal
+      $'\n') DIRTY=1;nl;;
       [[:print:][:space:]]) DIRTY=1;append "$LAST_KEY";;
     esac
   else
@@ -46,7 +47,7 @@ function process_input {
       $'\e') command_exit;;
       $'\n') command_eval;;
       $'\177') bs;; # bs is delete on my terminal
-      $'\t') autocomplete "$LAST_COMMAND";;
+      $'\t') autocomplete "$BUFCOM";;
       [[:print:][:space:]]) BUFPATTERN='';append "$LAST_KEY";;
     esac
   fi
@@ -59,11 +60,6 @@ function cursor_restore {
   LINE="${BUFCSR[-1]%;*}"
   COLUMN="${BUFCSR[-1]#*;}"
   unset 'BUFCSR[-1]'
-}
-function status_render {
-  cursor_save
-  echo -ne "\e[$SCREEN_LINES;1H\e[K$MODE\t$LINE,$COLUMN\t$BUFIDX\t$LAST_FUN"
-  cursor_restore
 }
 function up {
   LAST_FUN="up"
@@ -95,11 +91,9 @@ function nl {
   LAST_FUN="nl"
   local yanked_text="${BUFCUR:$COLUMN-1}"
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}"
-  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
   local -i i=${#BUFFER[@]} j=i+1
   while (( $i > $BUFIDX ));do
     BUFFER[$i]="${BUFFER[$i-1]}"
-    echo -ne "\e[$j;1H\e[K${BUFFER[$i]}"
     (( i-- ))
     (( j-- ))
   done
@@ -108,36 +102,35 @@ function nl {
   declare -gn BUFCUR=BUFFER[$BUFIDX]
   declare -g ${!BUFCUR}="$yanked_text"
   (( LINE++ ))
-  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
 }
 function bs {
   LAST_FUN="bs"
   if (( COLUMN > 1 ));then
     (( COLUMN-- ))
     declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}${BUFCUR:$COLUMN}"
-    echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
   fi
 }
 function append {
   LAST_FUN="append"
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$1${BUFCUR:$COLUMN-1}"
-  (( COLUMN=${#BUFCUR}+1 ))
-  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
+  (( COLUMN++ ))
 }
 function replace {
   LAST_FUN="replace"
   declare -g ${!BUFCUR}="$1"
   (( COLUMN=${#BUFCUR}+1 ))
-  echo -ne "\e[$LINE;1H\e[K${BUFCUR}"
 }
 function command_enter {
   cursor_save
-  LINE=$COMMAND_LINE
+  LINE=$LINE_COMMAND
   COLUMN=1
   MODE='COMMAND'
-  LAST_COMMAND=''
+  BUFCOM=''
+  declare -gn BUFCUR=BUFCOM
+  clear_line
+}
+function clear_line {
   echo -ne "\e[$LINE;1H\e[K"
-  declare -gn BUFCUR=LAST_COMMAND
 }
 function command_exit {
   cursor_restore
@@ -148,8 +141,9 @@ function command_exit {
   BUFPATTERN=""
 }
 function command_eval {
-  echo -ne "\e[$COMMAND_LINE;1H\e[K"
-  eval ${LAST_COMMAND}
+  clear_line
+  eval "$BUFCOM"
+  BUFCOM=""
   command_exit
 }
 function s {
@@ -181,6 +175,8 @@ function o {
     echo -ne "I need a filename to open"
   elif [[ ! -f $1 ]];then
     echo -ne "That file doesn't exist"
+  elif [[ ! -r $1 ]];then
+    echo -ne "I don't have permission to read that file"
   else
     save_dirty "Save before opening?"
     local line i=0
@@ -190,7 +186,8 @@ function o {
       (( i++ ))
     done < "$1"
     FILENAME="$1"
-    redraw
+    LINE=1
+    COLUMN=1
   fi
 }
 function autocomplete {
@@ -208,37 +205,46 @@ function autocomplete {
     (( IDXMATCH == ${#BUFMATCH[@]} )) && IDXMATCH=0
   fi
 }
-function redraw {
-  LAST_FUN="redraw"
-  clear
-  local -i i=0 j=i+1 e=${#BUFFER[@]}
-  while (( i < e ));do
-    echo -ne "\e[$j;1H\e[K${BUFFER[$i]}"
+function render {
+  LAST_FUN="render"
+  echo -ne '\e[?25l'
+  cursor_save
+  local -i i=0 j=i+1
+  while (( j < $LINE_COMMAND ));do
+    echo -ne "\e[$j;1H\e[K"
+    echo -n "${BUFFER[$i]}"
     (( i++ ))
     (( j++ ))
   done
-  LINE=1
-  COLUMN=1
+  [[ -n "$BUFCOM" ]] && echo -ne "\e[$LINE_COMMAND;1H\e[K$BUFCOM"
+  local filename="$FILENAME"
+  [[ -z "$FILENAME" ]] && filename="No filename"
+  echo -ne "\e[$LINE_STATUS;1H\e[K$MODE\t$LINE,$COLUMN\t${#BUFFER[@]} LINES\t$filename"
+  cursor_restore
+  echo -ne '\e[?25h'
 }
 function save_dirty {
-  if [[ -n $DIRTY && -n "$FILENAME" ]];then
+  if [[ -n "$DIRTY" && -n "$FILENAME" ]];then
     local -u c
     read -N1 -p "$1 " c
-    [[ "$c" = 'Y' ]] && echo -ne "\e[$COMMAND_LINE;1H\e[K" && s
+    if [[ "$c" = 'Y' ]];then
+      BUFCOM=''
+      s
+    fi
   fi
 }
 function q {
-  command_enter
-  status_render
   save_dirty "Save before exiting?"
-  clear
+  echo -ne '\e[2J\e[H'
   exit
 }
+function _q {
+  command_enter
+  q
+}
 # main
-trap q INT
+trap _q INT
 if [[ -f "$FILENAME" ]];then
   o "$FILENAME"
-else
-  redraw
 fi
-while :; do status_render; process_input; done
+while :; do render; process_input; done

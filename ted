@@ -1,11 +1,10 @@
 #!/bin/bash
+shopt -s checkwinsize
+bash -c : # trigger ^
 declare TEDPATH=$(readlink -f "$0")
-declare SCREEN_SIZE=$(stty size)
-declare -i SCREEN_LINES=${SCREEN_SIZE% *}
-declare -i SCREEN_COLUMNS=${SCREEN_SIZE#* }
-declare -i LINE_STATUS=$SCREEN_LINES
-declare -i LINE_COMMAND=$SCREEN_LINES-1
-declare -i WINDOW_LINES=$SCREEN_LINES-2
+declare -i LINE_STATUS=$LINES
+declare -i LINE_COMMAND=$LINES-1
+declare -i WINDOW_LINES=$LINES-2
 declare -i LINE_OFFSET=0
 declare -i COLUMN_OFFSET=0
 declare -i COLUMN=1
@@ -70,7 +69,7 @@ function up {
     (( LINE_CURSOR-- ))
     declare -gn BUFCUR=BUFFER[$BUFIDX]
     (( $COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
-    (( COLUMN < SCREEN_COLUMNS )) && COLUMN_CURSOR=COLUMN
+    (( COLUMN < COLUMNS )) && COLUMN_CURSOR=COLUMN
   fi
 }
 function down {
@@ -80,7 +79,7 @@ function down {
     (( LINE_CURSOR++ ))
     declare -gn BUFCUR=BUFFER[$BUFIDX]
     (( COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
-    (( COLUMN < SCREEN_COLUMNS )) && COLUMN_CURSOR=COLUMN
+    (( COLUMN < COLUMNS )) && COLUMN_CURSOR=COLUMN
   fi
 }
 function left {
@@ -213,15 +212,15 @@ function render {
   if (( COLUMN_CURSOR < 1 ));then
     COLUMN_OFFSET=$COLUMN_OFFSET+$COLUMN_CURSOR-1
     COLUMN_CURSOR=1
-  elif (( COLUMN_CURSOR > $SCREEN_COLUMNS ));then
-    COLUMN_OFFSET=$COLUMN_OFFSET+$COLUMN_CURSOR-$SCREEN_COLUMNS
-    COLUMN_CURSOR=$SCREEN_COLUMNS
+  elif (( COLUMN_CURSOR > COLUMNS ));then
+    COLUMN_OFFSET=$(( COLUMN_OFFSET+COLUMN_CURSOR-COLUMNS ))
+    COLUMN_CURSOR=$COLUMNS
   fi
   cursor_save
   local -i i=$LINE_OFFSET j=1 h=$LINE_OFFSET+$WINDOW_LINES
   while (( i < h ));do
     echo -ne "\e[$j;1H\e[K"
-    echo -n "${BUFFER[$i]:$COLUMN_OFFSET:$SCREEN_COLUMNS}"
+    echo -n "${BUFFER[$i]:$COLUMN_OFFSET:$COLUMNS}"
     (( i++ ))
     (( j++ ))
   done

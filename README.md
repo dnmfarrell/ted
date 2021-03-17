@@ -1,11 +1,7 @@
 ted
 ===
 
-
-Dependencies
-------------
-* bash 4.3
-* GNU coreutils
+Requires bash version 4.3 or higher
 
 Copyright 2021 David Farrell
 

@@ -1,7 +1,6 @@
 #!/bin/bash
 shopt -s checkwinsize
 bash -c : # trigger ^
-declare TEDPATH=$(readlink -f "$0")
 declare -i LINE_STATUS=$LINES
 declare -i LINE_COMMAND=$LINES-1
 declare -i WINDOW_LINES=$LINES-2
@@ -145,25 +144,18 @@ function command_eval {
   command_exit
 }
 function s {
-  local filename="$FILENAME"
-  [[ -n "$1" ]] && filename="$1"
-  local filename_abs=$(readlink -f "$filename")
-  if [[ -z "$filename" ]];then
+  if [[ -z "$1" ]];then
     echo -n "No filename provided!"
-  elif [[ "$filename_abs" = "$TEDPATH" ]];then
-    echo -n "You can't replace me!"
-  elif [[ -f "$filename" && "$filename" != "$FILENAME" ]];then
-    echo -n "That file already exists"
   else
-    echo -n '' > $filename
+    echo -n '' > $1
     local -i i=0 len=${#BUFFER[@]}
     while (( i < len ));do
-      echo "${BUFFER[$i]}" >> $filename
+      echo "${BUFFER[$i]}" >> $1
       (( i++ ))
     done
-    printf "\e[KWrote %d lines to %s" ${#BUFFER[@]} "$filename"
+    printf "\e[KWrote %d lines to %s" ${#BUFFER[@]} "$1"
     DIRTY=''
-    [[ -z "$FILENAME" ]] && FILENAME="$filename"
+    [[ -z "$FILENAME" ]] && FILENAME="$1"
   fi
 }
 function o {

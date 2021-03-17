@@ -1,6 +1,6 @@
 #!/bin/bash
 shopt -s checkwinsize
-bash -c : # trigger ^
+$BASH -c : # trigger ^
 declare -i LINE_STATUS=$LINES
 declare -i LINE_COMMAND=$LINES-1
 declare -i WINDOW_LINES=$LINES-2

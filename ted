@@ -17,7 +17,6 @@ declare -i BUFIDX=0
 declare -a BUFFER=('')
 declare -n BUFCUR=BUFFER[0]
 declare -x BUFCOM=''
-declare LAST_FUN=''
 declare LAST_KEY=''
 declare MODE='NORMAL'
 declare FILENAME="$1"
@@ -27,7 +26,6 @@ declare -gi IDXMATCH=0
 declare -g BUFPATTERN=""
 
 function process_input {
-  LAST_FUN=''
   read -srN1 LAST_KEY
   if [[ $MODE = 'NORMAL' ]];then
     case $LAST_KEY in
@@ -66,7 +64,6 @@ function cursor_restore {
   unset 'BUFCSR[-1]'
 }
 function up {
-  LAST_FUN="up"
   if (( LINE > 1 ));then
     (( LINE-- ))
     (( BUFIDX-- ))
@@ -77,7 +74,6 @@ function up {
   fi
 }
 function down {
-  LAST_FUN="down"
   if (( LINE < ${#BUFFER[@]} ));then
     (( LINE++))
     (( BUFIDX++ ))
@@ -88,15 +84,12 @@ function down {
   fi
 }
 function left {
-  LAST_FUN="left"
   (( COLUMN > 1 )) && (( COLUMN-- )) && (( COLUMN_CURSOR-- ))
 }
 function right {
-  LAST_FUN="right"
   (( COLUMN <= ${#BUFCUR} )) && (( COLUMN++ )) && (( COLUMN_CURSOR++ ))
 }
 function nl {
-  LAST_FUN="nl"
   local yanked_text="${BUFCUR:$COLUMN-1}"
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}"
   local -i i=${#BUFFER[@]} j=i+1
@@ -112,20 +105,17 @@ function nl {
   (( LINE++ ))
 }
 function bs {
-  LAST_FUN="bs"
   if (( COLUMN > 1 ));then
     (( COLUMN-- ))
     declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}${BUFCUR:$COLUMN}"
   fi
 }
 function append {
-  LAST_FUN="append"
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$1${BUFCUR:$COLUMN-1}"
   (( COLUMN++ ))
   (( COLUMN_CURSOR++ ))
 }
 function replace {
-  LAST_FUN="replace"
   declare -g ${!BUFCUR}="$1"
   (( COLUMN=${#BUFCUR}+1 ))
 }
@@ -156,7 +146,6 @@ function command_eval {
   command_exit
 }
 function s {
-  LAST_FUN="s"
   local filename="$FILENAME"
   [[ -n "$1" ]] && filename="$1"
   local filename_abs=$(readlink -f "$filename")
@@ -179,7 +168,6 @@ function s {
   fi
 }
 function o {
-  LAST_FUN="o"
   if [[ -z $1 ]];then
     echo -ne "I need a filename to open"
   elif [[ ! -f $1 ]];then
@@ -200,7 +188,6 @@ function o {
   fi
 }
 function autocomplete {
-  LAST_FUN="autocomplete"
   local words=( $1 )
   (( "${#words[@]}" < 2 )) && return # I only autocomplete args
   if [[ -z "$BUFPATTERN" ]];then
@@ -215,7 +202,6 @@ function autocomplete {
   fi
 }
 function render {
-  LAST_FUN="render"
   echo -ne '\e[?25l'
   if (( LINE_CURSOR < 1 ));then
     LINE_OFFSET=$LINE_OFFSET+$LINE_CURSOR-1

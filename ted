@@ -24,19 +24,23 @@ declare -gi IDXMATCH=0
 declare -g BUFPATTERN=""
 
 function process_input {
-  read -srN1 LAST_KEY
+  read -rsN1 LAST_KEY
   if [[ $MODE = 'NORMAL' ]];then
     case $LAST_KEY in
-      'k') up;;
-      'j') down;;
-      'h') left;;
-      'l') right;;
-      'i') MODE="INSERT";;
+      'k') up 1;;
+      'K') up ${#BUFFER[@]};;
+      'j') down 1;;
+      'J') down ${#BUFFER[@]};;
+      'h') left 1;;
+      'H') left ${#BUFCUR};;
+      'l') right 1;;
+      'L') right ${#BUFCUR};;
+      'i') MODE="INSERT";echo -ne '\e[6 q\e[?2c';;
       ':') command_enter;;
     esac
   elif [[ $MODE = 'INSERT' ]];then
     case "$LAST_KEY" in
-      $'\e') MODE='NORMAL';;
+      $'\e') MODE='NORMAL';echo -ne '\e[2 q\e[?6c';;
       $'\b') DIRTY=1;bs;;
       $'\177') DIRTY=1;bs;; # bs sends delete on my terminal
       $'\n') DIRTY=1;nl;;
@@ -53,39 +57,74 @@ function process_input {
   fi
 }
 function cursor_save {
-  BUFCSR+=("$LINE_CURSOR;$COLUMN_CURSOR")
+  BUFCSR+=("$LINE $COLUMN $LINE_CURSOR $COLUMN_CURSOR")
 }
 function cursor_restore {
-  echo -ne "\e[${BUFCSR[-1]}H"
-  LINE_CURSOR="${BUFCSR[-1]%;*}"
-  COLUMN_CURSOR="${BUFCSR[-1]#*;}"
+  local -a last_pos=(${BUFCSR[-1]})
+  LINE="${last_pos[0]}"
+  COLUMN="${last_pos[1]}"
+  LINE_CURSOR="${last_pos[2]}"
+  COLUMN_CURSOR="${last_pos[3]}"
+  echo -ne "\e[$LINE_CURSOR;${COLUMN_CURSOR}H"
   unset 'BUFCSR[-1]'
 }
 function up {
-  if (( LINE > 1 ));then
-    (( LINE-- ))
-    (( BUFIDX-- ))
-    (( LINE_CURSOR-- ))
+  (( lines_remaining=LINE-1 ))
+  if (( lines_remaining > 0 ));then
+    if (( lines_remaining > $1 ));then
+      (( LINE-=$1 ))
+      (( BUFIDX-=$1 ))
+      (( LINE_CURSOR-=$1 ))
+    else
+      (( LINE=1 ))
+      (( BUFIDX=0 ))
+      (( LINE_CURSOR-=lines_remaining ))
+    fi
     declare -gn BUFCUR=BUFFER[$BUFIDX]
     (( $COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
     (( COLUMN < COLUMNS )) && COLUMN_CURSOR=COLUMN
   fi
 }
 function down {
-  if (( LINE < ${#BUFFER[@]} ));then
-    (( LINE++))
-    (( BUFIDX++ ))
-    (( LINE_CURSOR++ ))
+  (( lines_remaining=${#BUFFER[@]}-LINE ))
+  if (( lines_remaining > 0 ));then
+    if (( lines_remaining > $1 ));then
+      (( LINE+=$1 ))
+      (( BUFIDX+=$1 ))
+      (( LINE_CURSOR+=$1 ))
+    else
+      (( LINE=${#BUFFER[@]} ))
+      (( BUFIDX=${#BUFFER[@]}-1 ))
+      (( LINE_CURSOR+=lines_remaining ))
+    fi
     declare -gn BUFCUR=BUFFER[$BUFIDX]
-    (( COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
+    (( $COLUMN > ${#BUFCUR} )) && COLUMN=${#BUFCUR}+1
     (( COLUMN < COLUMNS )) && COLUMN_CURSOR=COLUMN
   fi
 }
 function left {
-  (( COLUMN > 1 )) && (( COLUMN-- )) && (( COLUMN_CURSOR-- ))
+  (( columns_remaining=COLUMN-1 ))
+  if (( columns_remaining > 0 ));then
+    if (( columns_remaining > $1 ));then
+      (( COLUMN-=$1 ))
+      (( COLUMN_CURSOR-=$1 ))
+    else
+      (( COLUMN=1 ))
+      (( COLUMN_CURSOR-=columns_remaining ))
+    fi
+  fi
 }
 function right {
-  (( COLUMN <= ${#BUFCUR} )) && (( COLUMN++ )) && (( COLUMN_CURSOR++ ))
+  (( columns_remaining=${#BUFCUR}-COLUMN+1 ))
+  if (( columns_remaining > 0 ));then
+    if (( columns_remaining > $1 ));then
+      (( COLUMN+=$1 ))
+      (( COLUMN_CURSOR+=$1 ))
+    else
+      (( COLUMN=${#BUFCUR}+1 ))
+      (( COLUMN_CURSOR+=columns_remaining ))
+    fi
+  fi
 }
 function nl {
   local yanked_text="${BUFCUR:$COLUMN-1}"
@@ -96,35 +135,40 @@ function nl {
     (( i-- ))
     (( j-- ))
   done
-  COLUMN=1
-  BUFIDX=$LINE
-  declare -gn BUFCUR=BUFFER[$BUFIDX]
+  down 1
   declare -g ${!BUFCUR}="$yanked_text"
-  (( LINE++ ))
+  left "${#BUFCUR}"
 }
 function bs {
   if (( COLUMN > 1 ));then
-    (( COLUMN-- ))
+    left 1
     declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}${BUFCUR:$COLUMN}"
+  elif (( LINE > 1 )) && [ $MODE = 'INSERT' ];then
+    local -i i=BUFIDX-1
+    local len="${#BUFFER[$i]}"
+    BUFFER[i]="${BUFFER[$i]}$BUFCUR"
+    BUFFER=( "${BUFFER[@]::$BUFIDX}" "${BUFFER[@]:$(( BUFIDX+1 ))}" )
+    up 1
+    right len
   fi
 }
 function append {
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$1${BUFCUR:$COLUMN-1}"
-  (( COLUMN++ ))
-  (( COLUMN_CURSOR++ ))
+  right 1
 }
 function replace {
   declare -g ${!BUFCUR}="$1"
   (( COLUMN=${#BUFCUR}+1 ))
+  (( COLUMN_CURSOR${#BUFCUR}+1 ))
 }
 function command_enter {
   cursor_save
   LINE_CURSOR=$LINE_COMMAND
   COLUMN_CURSOR=1
   MODE='COMMAND'
+  echo -ne '\e[6 q\e[?2c' # cursor bar (xterm et al) / underline VGA
   BUFCOM=''
   declare -gn BUFCUR=BUFCOM
-  clear_line
 }
 function clear_line {
   echo -ne "\e[$LINE_CURSOR;1H\e[K"
@@ -132,6 +176,7 @@ function clear_line {
 function command_exit {
   cursor_restore
   MODE='NORMAL'
+  echo -ne '\e[2 q\e[?8c' # cursor block
   declare -gn BUFCUR=BUFFER[$BUFIDX]
   BUFMATCH=('')
   IDXMATCH=0
@@ -176,6 +221,7 @@ function o {
     FILENAME="$1"
     LINE=1
     COLUMN=1
+    DIRTY=''
   fi
 }
 function autocomplete {
@@ -194,34 +240,37 @@ function autocomplete {
 }
 function render {
   echo -ne '\e[?25l'
-  if (( LINE_CURSOR < 1 ));then
-    LINE_OFFSET=$LINE_OFFSET+$LINE_CURSOR-1
-    LINE_CURSOR=1
-  elif (( LINE_CURSOR > $WINDOW_LINES ));then
-    LINE_OFFSET=$LINE_OFFSET+$LINE_CURSOR-$WINDOW_LINES
-    LINE_CURSOR=$WINDOW_LINES
+  if [ "$MODE" = 'COMMAND' ];then
+    echo -ne "\e[$LINE_COMMAND;1H\e[K$BUFCOM"
+  else
+    if (( LINE_CURSOR < 1 ));then
+      LINE_OFFSET=$LINE_OFFSET+$LINE_CURSOR-1
+      LINE_CURSOR=1
+    elif (( LINE_CURSOR > $WINDOW_LINES ));then
+      LINE_OFFSET=$LINE_OFFSET+$LINE_CURSOR-$WINDOW_LINES
+      LINE_CURSOR=$WINDOW_LINES
+    fi
+    if (( COLUMN_CURSOR < 1 ));then
+      COLUMN_OFFSET=$COLUMN_OFFSET+$COLUMN_CURSOR-1
+      COLUMN_CURSOR=1
+    elif (( COLUMN_CURSOR > COLUMNS ));then
+      COLUMN_OFFSET=$(( COLUMN_OFFSET+COLUMN_CURSOR-COLUMNS ))
+      COLUMN_CURSOR=$COLUMNS
+    fi
+    cursor_save
+    local -i i=$LINE_OFFSET j=1 h=$LINE_OFFSET+$WINDOW_LINES
+    while (( i < h ));do
+      echo -ne "\e[$j;1H\e[K"
+      echo -n "${BUFFER[$i]:$COLUMN_OFFSET:$COLUMNS}"
+      (( i++ ))
+      (( j++ ))
+    done
+    local filename="$FILENAME"
+    [[ -z "$FILENAME" ]] && filename="No filename"
+    echo -ne "\e[$LINE_STATUS;1H\e[K$MODE\t$LINE,$COLUMN\t${#BUFFER[@]} LINES\t$filename\t$LINE_OFFSET\t$LINE_CURSOR,$COLUMN_CURSOR"
+    cursor_restore
   fi
-  if (( COLUMN_CURSOR < 1 ));then
-    COLUMN_OFFSET=$COLUMN_OFFSET+$COLUMN_CURSOR-1
-    COLUMN_CURSOR=1
-  elif (( COLUMN_CURSOR > COLUMNS ));then
-    COLUMN_OFFSET=$(( COLUMN_OFFSET+COLUMN_CURSOR-COLUMNS ))
-    COLUMN_CURSOR=$COLUMNS
-  fi
-  cursor_save
-  local -i i=$LINE_OFFSET j=1 h=$LINE_OFFSET+$WINDOW_LINES
-  while (( i < h ));do
-    echo -ne "\e[$j;1H\e[K"
-    echo -n "${BUFFER[$i]:$COLUMN_OFFSET:$COLUMNS}"
-    (( i++ ))
-    (( j++ ))
-  done
-  [[ -n "$BUFCOM" ]] && echo -ne "\e[$LINE_COMMAND;1H\e[K$BUFCOM"
-  local filename="$FILENAME"
-  [[ -z "$FILENAME" ]] && filename="No filename"
-  echo -ne "\e[$LINE_STATUS;1H\e[K$MODE\t$LINE,$COLUMN\t${#BUFFER[@]} LINES\t$filename\t$LINE_OFFSET\t$LINE_CURSOR"
-  cursor_restore
-  echo -ne '\e[?25h'
+  echo -ne "\e[?25h" #\e[$LINE_CURSOR;${LINE_COLUMN}H"
 }
 function save_dirty {
   if [[ -n "$DIRTY" && -n "$FILENAME" ]];then
@@ -229,18 +278,20 @@ function save_dirty {
     read -N1 -p "$1 " c
     if [[ "$c" = 'Y' ]];then
       BUFCOM=''
-      s
+      s "$FILENAME"
     fi
   fi
 }
 function q {
   save_dirty "Save before exiting?"
-  echo -ne '\e[2J\e[H'
+  echo -ne '\e[ q\e[?0c\ec' # reset cursor, clear screen, cursor
   exit
 }
 function _q {
-  command_enter
-  q
+  command_enter # jump to the command line
+  clear_line    # render won't have run
+  stty 'echo'   # re-enable because of read -s
+  q             # now we're ready to shutdown
 }
 # main
 trap _q INT

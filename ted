@@ -36,7 +36,7 @@ function process_input {
       'l') right 1;;
       'L') right ${#BUFCUR};;
       'i') MODE="INSERT";echo -ne '\e[6 q\e[?2c';;
-      ':') command_enter;;
+      ';') command_enter;;
     esac
   elif [[ $MODE = 'INSERT' ]];then
     case "$LAST_KEY" in
@@ -270,7 +270,7 @@ function render {
     echo -ne "\e[$LINE_STATUS;1H\e[K$MODE\t$LINE,$COLUMN\t${#BUFFER[@]} LINES\t$filename\t$LINE_OFFSET\t$LINE_CURSOR,$COLUMN_CURSOR"
     cursor_restore
   fi
-  echo -ne "\e[?25h" #\e[$LINE_CURSOR;${LINE_COLUMN}H"
+  echo -ne "\e[?25h"
 }
 function save_dirty {
   if [[ -n "$DIRTY" && -n "$FILENAME" ]];then

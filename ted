@@ -1,6 +1,6 @@
 #!/bin/bash
-shopt -s checkwinsize
-$BASH -c : # trigger ^
+shopt -s checkwinsize extglob
+$BASH -c : # trigger checkwinsize to populate LINES && COLUMNS
 declare -i LINE_STATUS=$LINES
 declare -i LINE_COMMAND=$LINES-1
 declare -i WINDOW_LINES=$LINES-2
@@ -22,25 +22,34 @@ declare DIRTY=''
 declare -ga BUFMATCH=('')
 declare -gi IDXMATCH=0
 declare -g BUFPATTERN=""
+declare SEEN_WHITESPACE
 
 function process_input {
   read -rsN1 LAST_KEY
   if [[ $MODE = 'NORMAL' ]];then
     case $LAST_KEY in
+      '^') to_col 1;;
+      '$') right ${#BUFCUR};;
       'k') up 1;;
-      'K') up ${#BUFFER[@]};;
+      'K') up 25;;
       'j') down 1;;
-      'J') down ${#BUFFER[@]};;
+      'J') down 25;;
       'h') left 1;;
-      'H') left ${#BUFCUR};;
+      'H') word_back;;
       'l') right 1;;
-      'L') right ${#BUFCUR};;
-      'i') MODE="INSERT";echo -ne '\e[6 q\e[?2c';;
+      'L') word_fwd;;
+      'a') insert_enter;right 1;;
+      'A') insert_enter;right ${#BUFCUR};;
+      'i') insert_enter;;
+      'I') insert_enter;to_col 1;;
+      'o') insert_enter;right ${#BUFCUR};nl;;
+      'O') insert_enter;to_col 1;nl;up 1;;
+      'S') insert_enter;DIRTY=1;replace;;
       ';') command_enter;;
     esac
   elif [[ $MODE = 'INSERT' ]];then
     case "$LAST_KEY" in
-      $'\e') MODE='NORMAL';echo -ne '\e[2 q\e[?6c';;
+      $'\e') normal_enter;;
       $'\b') DIRTY=1;bs;;
       $'\177') DIRTY=1;bs;; # bs sends delete on my terminal
       $'\n') DIRTY=1;nl;;
@@ -114,6 +123,20 @@ function left {
     fi
   fi
 }
+function to_col {
+  if (( $1 < COLUMN ));then
+    left $(( $COLUMN-$1 ))
+  elif (( $1 > COLUMN ));then
+    right $(( $1-$COLUMN ))
+  fi
+}
+function to_line {
+  if (( $1 < LINE ));then
+    up $(( $LINE-$1 ))
+  elif (( $1 > LINE ));then
+    down $(( $1-$LINE ))
+  fi
+}
 function right {
   (( columns_remaining=${#BUFCUR}-COLUMN+1 ))
   if (( columns_remaining > 0 ));then
@@ -137,7 +160,7 @@ function nl {
   done
   down 1
   declare -g ${!BUFCUR}="$yanked_text"
-  left "${#BUFCUR}"
+  to_col 1
 }
 function bs {
   if (( COLUMN > 1 ));then
@@ -152,6 +175,43 @@ function bs {
     right len
   fi
 }
+function word_back {
+  if (( COLUMN > 1 )); then
+    local words=(${BUFCUR:0:$COLUMN-1})
+    if (( ${#words[@]} > 0 ));then
+      local sentence="${BUFCUR%"${words[-1]}"*}"
+      to_col $(( ${#sentence} + 1 ))
+    else
+      to_col 1
+      word_back
+    fi
+  elif (( LINE > 1 ));then
+    up 1
+    right ${#BUFCUR}
+    word_back
+  fi
+}
+function word_fwd {
+  if (( COLUMN > ${#BUFCUR} )) && (( LINE < LINES ));then
+    down 1
+    to_col 1
+    SEEN_WHITESPACE=1
+    word_fwd
+  else
+    local i=$(( COLUMN-1 ))
+    local c="${BUFCUR:$i:1}"
+    if [[ "$c" == [^[:space:]] ]];then
+      if (( SEEN_WHITESPACE == 1 ));then
+        SEEN_WHITESPACE=0
+        return 0
+      fi
+    else
+      SEEN_WHITESPACE=1
+    fi
+    right 1
+    word_fwd
+  fi
+}
 function append {
   declare -g ${!BUFCUR}="${BUFCUR:0:$COLUMN-1}$1${BUFCUR:$COLUMN-1}"
   right 1
@@ -161,12 +221,20 @@ function replace {
   (( COLUMN=${#BUFCUR}+1 ))
   (( COLUMN_CURSOR${#BUFCUR}+1 ))
 }
+function insert_enter {
+  MODE='INSERT'
+  echo -ne '\e[6 q\e[?2c' # cursor bar for xterm et al. underline for VGA
+}
+function normal_enter {
+  MODE='NORMAL'
+  echo -ne '\e[2 q\e[?8c' # cursor block for xterm et al + VGA
+}
 function command_enter {
+  MODE='COMMAND'
+  echo -ne '\e[6 q\e[?2c' # cursor bar for xterm et al. underline for VGA
   cursor_save
   LINE_CURSOR=$LINE_COMMAND
   COLUMN_CURSOR=1
-  MODE='COMMAND'
-  echo -ne '\e[6 q\e[?2c' # cursor bar (xterm et al) / underline VGA
   BUFCOM=''
   declare -gn BUFCUR=BUFCOM
 }
@@ -175,18 +243,11 @@ function clear_line {
 }
 function command_exit {
   cursor_restore
-  MODE='NORMAL'
-  echo -ne '\e[2 q\e[?8c' # cursor block
   declare -gn BUFCUR=BUFFER[$BUFIDX]
   BUFMATCH=('')
   IDXMATCH=0
   BUFPATTERN=""
-}
-function command_eval {
-  clear_line
-  eval "$BUFCOM"
-  BUFCOM=""
-  command_exit
+  normal_enter
 }
 function s {
   if [[ -z "$1" ]];then
@@ -292,6 +353,21 @@ function _q {
   clear_line    # render won't have run
   stty 'echo'   # re-enable because of read -s
   q             # now we're ready to shutdown
+}
+function command_eval {
+  clear_line
+  if [[ "$BUFCOM" == +([[:digit:]]) ]]; then
+    command_exit
+    if (( BUFCOM > ${#BUFFER[@]} ));then
+      to_line ${#BUFFER[@]}
+    else
+      to_line $BUFCOM
+    fi
+  else
+    eval "$BUFCOM"
+    command_exit
+  fi
+  BUFCOM=""
 }
 # main
 trap _q INT

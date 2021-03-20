@@ -23,17 +23,19 @@ declare -ga BUFMATCH=('')
 declare -gi IDXMATCH=0
 declare -g BUFPATTERN=""
 declare SEEN_WHITESPACE
+declare SEEN_NONSPACE
 
 function process_input {
   read -rsN1 LAST_KEY
   if [[ $MODE = 'NORMAL' ]];then
     case $LAST_KEY in
       '^') to_col 1;;
+      'b') cursor_restore;;
       '$') right ${#BUFCUR};;
       'k') up 1;;
-      'K') up 25;;
+      'K') page_up;;
       'j') down 1;;
-      'J') down 25;;
+      'J') page_down;;
       'h') left 1;;
       'H') word_back;;
       'l') right 1;;
@@ -69,13 +71,15 @@ function cursor_save {
   BUFCSR+=("$LINE $COLUMN $LINE_CURSOR $COLUMN_CURSOR")
 }
 function cursor_restore {
-  local -a last_pos=(${BUFCSR[-1]})
-  LINE="${last_pos[0]}"
-  COLUMN="${last_pos[1]}"
-  LINE_CURSOR="${last_pos[2]}"
-  COLUMN_CURSOR="${last_pos[3]}"
-  echo -ne "\e[$LINE_CURSOR;${COLUMN_CURSOR}H"
-  unset 'BUFCSR[-1]'
+  if (( ${#BUFCSR} > 0 ));then
+    local -a last_pos=(${BUFCSR[-1]})
+    LINE="${last_pos[0]}"
+    COLUMN="${last_pos[1]}"
+    LINE_CURSOR="${last_pos[2]}"
+    COLUMN_CURSOR="${last_pos[3]}"
+    echo -ne "\e[$LINE_CURSOR;${COLUMN_CURSOR}H"
+    unset 'BUFCSR[-1]'
+  fi
 }
 function up {
   (( lines_remaining=LINE-1 ))
@@ -123,20 +127,6 @@ function left {
     fi
   fi
 }
-function to_col {
-  if (( $1 < COLUMN ));then
-    left $(( $COLUMN-$1 ))
-  elif (( $1 > COLUMN ));then
-    right $(( $1-$COLUMN ))
-  fi
-}
-function to_line {
-  if (( $1 < LINE ));then
-    up $(( $LINE-$1 ))
-  elif (( $1 > LINE ));then
-    down $(( $1-$LINE ))
-  fi
-}
 function right {
   (( columns_remaining=${#BUFCUR}-COLUMN+1 ))
   if (( columns_remaining > 0 ));then
@@ -147,6 +137,32 @@ function right {
       (( COLUMN=${#BUFCUR}+1 ))
       (( COLUMN_CURSOR+=columns_remaining ))
     fi
+  fi
+}
+function page_up {
+  cursor_save
+  up 25
+}
+function page_down {
+  cursor_save
+  down 25
+}
+function to_col {
+  if (( $1 < COLUMN ));then
+    cursor_save
+    left $(( $COLUMN-$1 ))
+  elif (( $1 > COLUMN ));then
+    cursor_save
+    right $(( $1-$COLUMN ))
+  fi
+}
+function to_line {
+  if (( $1 < LINE ));then
+    cursor_save
+    up $(( $LINE-$1 ))
+  elif (( $1 > LINE ));then
+    cursor_save
+    down $(( $1-$LINE ))
   fi
 }
 function nl {
